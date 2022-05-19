@@ -43,7 +43,7 @@ getPostListing c page = do
     let sub = ("subtext", toJSString $ fromSql subtext)
     let cat = ("category", toJSString category)
     let id = ("id", toJSString $ show $ (fromSql pid::Int))
-    return $ showJSON $ toJSObject [title, sub, cat]
+    return $ showJSON $ toJSObject [id, title, sub, cat]
     ) result
   return $ Just $ showJSON $ JSArray posts
 
@@ -74,7 +74,8 @@ getPostsInCategory c cat page = do
     let title = ("title", toJSString $ fromSql t)
     let sub = ("subtext", toJSString $ fromSql subtext)
     let id = ("id", toJSString $ show $ (fromSql pid::Int))
-    return $ showJSON $ toJSObject [title, sub]
+    let cat = ("category", toJSString category)
+    return $ showJSON $ toJSObject [id, cat, title, sub]
     ) result
   
   return $ Just $ showJSON $ toJSObject [("category", showJSON $ toJSString category), ("posts", showJSON $ JSArray posts)]
