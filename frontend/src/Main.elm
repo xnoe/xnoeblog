@@ -5,10 +5,11 @@ import Json.Decode exposing (Decoder, field, string, map3)
 
 import Browser
 import Browser.Navigation exposing (..)
-import Url 
+import Url
 import Html exposing (..)
 import Html.Attributes exposing (..)
 
+main : Program () Model Msg
 main =
   Browser.application { 
     init = init, 

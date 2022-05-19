@@ -29,6 +29,6 @@ executable backend
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends:    base ^>=4.14.3.0, happstack-server ^>=7.7.2, HDBC ^>= 2.4.0.4, HDBC-postgresql ^>= 2.3.2.4, json ^>= 0.10
+    build-depends:    base ^>=4.14.3.0, happstack-server ^>=7.7.2, HDBC ^>= 2.4.0.4, HDBC-postgresql ^>= 2.3.2.4, json ^>= 0.10, bytestring ^>= 0.10.12.0
     hs-source-dirs:   app
     default-language: Haskell2010

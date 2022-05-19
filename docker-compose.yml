@@ -6,6 +6,8 @@ services:
   
   backend:
     build: ./backend
+    depends_on: 
+      - database
   
   nginx:
     image: nginx:alpine
