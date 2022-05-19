@@ -43,7 +43,8 @@ getPostListing c page = do
     let sub = ("subtext", toJSString $ fromSql subtext)
     let cat = ("category", toJSString category)
     let id = ("id", toJSString $ show $ (fromSql pid::Int))
-    return $ showJSON $ toJSObject [id, title, sub, cat]
+    let catid = ("catid", toJSString $ fromSql cid)
+    return $ showJSON $ toJSObject [id, title, sub, cat, catid]
     ) result
   return $ Just $ showJSON $ JSArray posts
 
@@ -75,7 +76,8 @@ getPostsInCategory c cat page = do
     let sub = ("subtext", toJSString $ fromSql subtext)
     let id = ("id", toJSString $ show $ (fromSql pid::Int))
     let cat = ("category", toJSString category)
-    return $ showJSON $ toJSObject [id, cat, title, sub]
+    let catid = ("catid", toJSString $ fromSql cid)
+    return $ showJSON $ toJSObject [id, cat, title, sub, catid]
     ) result
   
   return $ Just $ showJSON $ toJSObject [("category", showJSON $ toJSString category), ("posts", showJSON $ JSArray posts)]
@@ -92,7 +94,8 @@ getPostContent c pid = do
       let title = ("title", toJSString $ fromSql t)
       let content = ("content", toJSString $ fromSql con)
       let cat = ("category", toJSString category)
-      return $ Just $ showJSON $ toJSObject [title, content, cat];
+      let catid = ("catid", toJSString $ fromSql cid)
+      return $ Just $ showJSON $ toJSObject [title, content, cat, catid];
     _ -> fail "Post does not exist!"
 
 main :: IO ()
