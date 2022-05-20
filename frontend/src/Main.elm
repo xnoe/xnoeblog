@@ -82,11 +82,17 @@ processLogin =
     "true" -> Just (User b)
     _ -> Nothing) (field "success" string) (field "username" string)
 
-processCreatePost : Decoder Bool
+processCreatePost : Decoder (Maybe String)
 processCreatePost =
-  Json.Decode.map (\a -> case a of 
-    "true" -> True
-    _ -> False) (field "success" string)
+  map2 (\a->\b->case a of 
+    "true" -> Just b
+    _ -> Nothing) (field "success" string) (field "postid" string)
+
+processWhoami : Decoder (Maybe String)
+processWhoami =
+  map2 (\a->\b->case a of 
+    "true" -> Just b
+    _ -> Nothing) (field "success" string) (field "username" string)
 
 messageOfRoute : Maybe Route -> Cmd Msg
 messageOfRoute r =
@@ -137,7 +143,8 @@ type Msg
   | SubtextUpdate String
   | CategoryUpdate String
   | CreatePost
-  | CreatePostResult (Result Http.Error Bool)
+  | CreatePostResult (Result Http.Error (Maybe String))
+  | GotWhoami (Result Http.Error (Maybe String))
 
 init : () -> Url.Url -> Browser.Navigation.Key -> (Model, Cmd Msg)
 init _ url key =
@@ -146,9 +153,9 @@ init _ url key =
       header = "", body = "", footer = "", pinnedPosts = [], 
       posts = [], route = r, key = key, errMessage = Nothing,
       username = "", password = "", user = Nothing,
-      title = "", subtext = "", content = "", category = "1"
+      title = "", subtext = "", content = "", category = "Blog Post"
     },
-    messageOfRoute r
+    Http.get {url = "/v1/whoami", expect = Http.expectJson GotWhoami processWhoami}
   )
 
 update : Msg -> Model -> (Model, Cmd Msg)
@@ -177,8 +184,10 @@ update msg model =
     ContentUpdate c -> ({model | content = c}, Cmd.none)
     CategoryUpdate c -> ({model | category = c}, Cmd.none)
     CreatePost -> (model, handleCreatePost model)
-    CreatePostResult (Ok True) -> (model, Cmd.none)
-    CreatePostResult (Ok False) -> ({model | errMessage = Just "Failed to create post"}, Cmd.none) 
+    CreatePostResult (Ok (Just postid)) -> (model, load ("/post/" ++ postid))
+    CreatePostResult (Ok Nothing) -> ({model | errMessage = Just "Failed to create post"}, Cmd.none)
+    GotWhoami (Ok (Just u)) -> ({model | user = Just (User u)}, messageOfRoute model.route)
+    GotWhoami (Ok Nothing) -> (model, messageOfRoute model.route)
     _ -> ({model | errMessage = Just "Something has gone horribly wrong."}, Cmd.none)
 
 handleLogin : Model -> Cmd Msg
@@ -317,6 +326,7 @@ createPostForm model =
     viewInput "text" "title" "Title" model.title TitleUpdate,
     viewInput "text" "subtext" "Subtext" model.subtext SubtextUpdate,
     viewTextarea "content" "Content" model.content ContentUpdate,
+    viewInput "text" "category" "Subtext" model.category CategoryUpdate,
     button [onClick CreatePost] [text "Create Post"]
   ]
 

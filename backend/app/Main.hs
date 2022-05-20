@@ -142,7 +142,7 @@ handleLogin c = do
   loginSuccess <- lift $ attemptLogin c username password
   case loginSuccess of
     Just authtoken -> do 
-      addCookie Session (mkCookie "token" authtoken)
+      addCookie (MaxAge 604800) (mkCookie "token" authtoken)
       ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("username", toJSString username)]
     Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("username", toJSString "")]
 
@@ -155,24 +155,45 @@ validateCookie c a u = do
     (at:[]):[] -> return $ (fromSql at) == (hexOfBS $ SHA256.hash $ C.pack a)
     _ -> return False
 
-attemptCreatePost :: IConnection t => t -> String -> String -> String -> String -> String -> String -> IO Bool
+createCategoryIfNotExist :: IConnection t => t -> String -> IO (Maybe String)
+createCategoryIfNotExist c n = do
+  getCategory <- prepare c "SELECT * FROM categories WHERE name = ?;"
+  execute getCategory [toSql n]
+  result <- fetchAllRows getCategory
+
+  case result of
+    [cid:name:[]] -> return $ fromSql cid
+    _ -> do
+      createCategory <- prepare c "INSERT INTO categories(name) VALUES(?) RETURNING catid;"
+      execute createCategory [toSql n]
+      category <- fetchAllRows createCategory
+      commit c
+
+      case category of 
+        [cid:[]] -> return $ Just $ fromSql cid
+        _ -> return Nothing
+
+
+attemptCreatePost :: IConnection t => t -> String -> String -> String -> String -> String -> String -> IO (Maybe String)
 attemptCreatePost c authtoken username title subtext content category = do
   cookieValid <- validateCookie c authtoken username
   case cookieValid of
-    False -> return False
+    False -> return Nothing
     True -> do
       -- First we should probably validate that the category actually exists
-      getCategory <- prepare c "SELECT * FROM categories WHERE catid = ?;"
-      execute getCategory [toSql category]
-      result <- fetchAllRows getCategory
+      result <- createCategoryIfNotExist c category
       case result of
-        [] -> do return False
-        _ -> do
+        Nothing -> do return Nothing
+        Just catid -> do
           -- If we're here, we know the category does actually exist
-          addPost <- prepare c "INSERT INTO posts(catid, title, subtext, content) VALUES(?, ?, ?, ?);"
-          execute addPost [toSql category, toSql title, toSql subtext, toSql content]
+          addPost <- prepare c "INSERT INTO posts(catid, title, subtext, content) VALUES(?, ?, ?, ?) RETURNING postid;"
+          execute addPost [toSql catid, toSql title, toSql subtext, toSql content]
+          post <- fetchAllRows addPost
           commit c
-          return True
+
+          case post of
+            [pid:[]] -> return $ Just $ fromSql pid
+            _ -> return Nothing
 
 handleCreatePost :: IConnection t => t -> ServerPart Response
 handleCreatePost c = do
@@ -186,8 +207,27 @@ handleCreatePost c = do
 
   success <- lift $ attemptCreatePost c authtoken username title subtext content category
   case success of 
-    True -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
-    False -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false")]
+    Just pid -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("postid", toJSString pid)]
+    Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("postid", toJSString "")]
+
+attemptWhoami :: IConnection t => t -> String -> IO (Maybe String)
+attemptWhoami c at = do
+  getUser <- prepare c "SELECT username FROM users WHERE authtoken = ?;"
+  let atHash = hexOfBS $ SHA256.hash $ C.pack at
+  execute getUser [toSql atHash]
+  result <- fetchAllRows getUser
+
+  case result of
+    [u:[]] -> return $ Just $ fromSql u
+    _ -> return $ Nothing
+
+handleWhoami :: IConnection t => t -> ServerPart Response
+handleWhoami c = do
+  authtoken <- lookCookieValue "token"
+  whoami <- lift $ attemptWhoami c authtoken
+  case whoami of
+    Just u -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("username", toJSString u)]
+    Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("username", toJSString "")]
 
 main :: IO ()
 main = do
@@ -209,5 +249,6 @@ main = do
          , dir "v1" $ dir "categories" $ require (getCategoryListing c 0) $ \cats -> ok $ toResponse cats
          , dir "v1" $ dir "login" $ handleLogin c
          , dir "v1" $ dir "createPost" $ handleCreatePost c
+         , dir "v1" $ dir "whoami" $ handleWhoami c
          , notFound $ toResponse "Endpoint does not exist"
          ]
