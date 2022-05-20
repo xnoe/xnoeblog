@@ -250,5 +250,8 @@ main = do
          , dir "v1" $ dir "login" $ handleLogin c
          , dir "v1" $ dir "createPost" $ handleCreatePost c
          , dir "v1" $ dir "whoami" $ handleWhoami c
+         , dir "v1" $ dir "logout" $ do
+            expireCookie "token"
+            ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
          , notFound $ toResponse "Endpoint does not exist"
          ]

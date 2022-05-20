@@ -76,6 +76,12 @@ processCategory : Decoder (String, List Post)
 processCategory =
   map2 (\a -> \b -> (a,b)) (field "category" string) (field "posts" processPostListing)
 
+processLogout : Decoder (Bool)
+processLogout = 
+  Json.Decode.map (\a -> case a of 
+    "true" -> True
+    _ -> False) (field "success" string)
+
 processLogin : Decoder (Maybe User)
 processLogin =
   map2 (\a->\b->case a of 
@@ -138,6 +144,8 @@ type Msg
   | UsernameUpdate String
   | PasswordUpdate String
   | Login
+  | Logout
+  | LogoutResult (Result Http.Error Bool)
   | TitleUpdate String
   | ContentUpdate String
   | SubtextUpdate String
@@ -175,8 +183,10 @@ update msg model =
     GotPost (Ok (title, content, category)) -> ({model | errMessage = Nothing, header = title, body = content, footer = category}, Cmd.none)
     GotCategory (Ok (title, posts)) -> ({model | errMessage = Nothing, header = title, posts = posts}, Cmd.none)
     Login -> (model, handleLogin model)
-    LoginResult (Ok (Just _ as u)) -> ({model | user = u}, Cmd.none)
+    LoginResult (Ok (Just _ as u)) -> ({model | user = u}, load "/")
     LoginResult (Ok (Nothing)) -> ({model | errMessage = Just "Invalid username or password."}, Cmd.none)
+    Logout -> (model, Http.get {url = "/v1/logout", expect = Http.expectJson LogoutResult processLogout})
+    LogoutResult _ -> (model, load "/")
     UsernameUpdate u -> ({model | username = u}, Cmd.none)
     PasswordUpdate p -> ({model | password = p}, Cmd.none)
     TitleUpdate t -> ({model | title = t}, Cmd.none)
@@ -187,7 +197,7 @@ update msg model =
     CreatePostResult (Ok (Just postid)) -> (model, load ("/post/" ++ postid))
     CreatePostResult (Ok Nothing) -> ({model | errMessage = Just "Failed to create post"}, Cmd.none)
     GotWhoami (Ok (Just u)) -> ({model | user = Just (User u)}, messageOfRoute model.route)
-    GotWhoami (Ok Nothing) -> (model, messageOfRoute model.route)
+    GotWhoami _ -> (model, messageOfRoute model.route)
     _ -> ({model | errMessage = Just "Something has gone horribly wrong."}, Cmd.none)
 
 handleLogin : Model -> Cmd Msg
@@ -241,7 +251,7 @@ htmlView model =
     ] ++
       case model.user of 
         Nothing -> [a [href "/login"] [text "Login"]]
-        Just u -> [a [href "/logout"] [text "Logout"], text " - ", a [href "/create"] [text "Create Post"]]
+        Just u -> [a [onClick Logout] [text "Logout"], text " - ", a [href "/create"] [text "Create Post"]]
     ),
     renderModel model
   ]
