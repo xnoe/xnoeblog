@@ -76,9 +76,18 @@ processCategory : Decoder (String, List Post)
 processCategory =
   map2 (\a -> \b -> (a,b)) (field "category" string) (field "posts" processPostListing)
 
-processLogin : Decoder (String)
+processLogin : Decoder (Maybe User)
 processLogin =
-  (field "username" string)
+  map2 (\a->\b->case a of 
+    "true" -> Just (User b)
+    _ -> Nothing) (field "success" string) (field "username" string)
+
+processCreatePost : Decoder Bool
+processCreatePost =
+  Json.Decode.map (\a -> case a of 
+    "true" -> True
+    _ -> False) (field "success" string)
+
 messageOfRoute : Maybe Route -> Cmd Msg
 messageOfRoute r =
   case r of
@@ -96,7 +105,7 @@ type alias User = {
   }
 type alias Model = {
   header: String,
-  content: String,
+  body: String,
   footer: String,
   pinnedPosts: List Post,
   posts: List Post,
@@ -105,7 +114,11 @@ type alias Model = {
   errMessage: Maybe (String),
   username: String,
   password: String,
-  user: Maybe User
+  user: Maybe User,
+  title: String,
+  subtext: String,
+  content: String,
+  category: String
   }
 
 type Msg
@@ -115,18 +128,25 @@ type Msg
   | GotCategories (Result Http.Error (List Category))
   | GotPost (Result Http.Error (String, String, String))
   | GotCategory (Result Http.Error (String, List Post))
-  | LoginResult (Result Http.Error String)
-  | Username String
-  | Password String
+  | LoginResult (Result Http.Error (Maybe User))
+  | UsernameUpdate String
+  | PasswordUpdate String
   | Login
+  | TitleUpdate String
+  | ContentUpdate String
+  | SubtextUpdate String
+  | CategoryUpdate String
+  | CreatePost
+  | CreatePostResult (Result Http.Error Bool)
 
 init : () -> Url.Url -> Browser.Navigation.Key -> (Model, Cmd Msg)
 init _ url key =
   let r = P.parse routeParser url in
   ({
-      header = "", content = "", footer = "", pinnedPosts = [], 
+      header = "", body = "", footer = "", pinnedPosts = [], 
       posts = [], route = r, key = key, errMessage = Nothing,
-      username = "", password = "", user = Nothing
+      username = "", password = "", user = Nothing,
+      title = "", subtext = "", content = "", category = "1"
     },
     messageOfRoute r
   )
@@ -145,16 +165,46 @@ update msg model =
       )
     GotPosts (Ok l) -> ({model | errMessage = Nothing, posts = l}, Cmd.none)
     GotPosts (Err _) -> ({model | errMessage = Just "Failed to load posts"}, Cmd.none)
-    GotPost (Ok (title, content, category)) -> ({model | errMessage = Nothing, header = title, content = content, footer = category}, Cmd.none)
+    GotPost (Ok (title, content, category)) -> ({model | errMessage = Nothing, header = title, body = content, footer = category}, Cmd.none)
     GotCategory (Ok (title, posts)) -> ({model | errMessage = Nothing, header = title, posts = posts}, Cmd.none)
-    Username u -> ({model | username = u}, Cmd.none)
-    Password p -> ({model | password = p}, Cmd.none)
     Login -> (model, handleLogin model)
+    LoginResult (Ok (Just _ as u)) -> ({model | user = u}, Cmd.none)
+    LoginResult (Ok (Nothing)) -> ({model | errMessage = Just "Invalid username or password."}, Cmd.none)
+    UsernameUpdate u -> ({model | username = u}, Cmd.none)
+    PasswordUpdate p -> ({model | password = p}, Cmd.none)
+    TitleUpdate t -> ({model | title = t}, Cmd.none)
+    SubtextUpdate s -> ({model | subtext = s}, Cmd.none)
+    ContentUpdate c -> ({model | content = c}, Cmd.none)
+    CategoryUpdate c -> ({model | category = c}, Cmd.none)
+    CreatePost -> (model, handleCreatePost model)
+    CreatePostResult (Ok True) -> (model, Cmd.none)
+    CreatePostResult (Ok False) -> ({model | errMessage = Just "Failed to create post"}, Cmd.none) 
     _ -> ({model | errMessage = Just "Something has gone horribly wrong."}, Cmd.none)
 
 handleLogin : Model -> Cmd Msg
 handleLogin model =
-  Http.post {url = "/v1/login", body = multipartBody [stringPart "username" model.username, stringPart "password" model.password], expect = Http.expectJson LoginResult processLogin}
+  Http.post {
+    url = "/v1/login", 
+    body = multipartBody [stringPart "username" model.username, stringPart "password" model.password], 
+    expect = Http.expectJson LoginResult processLogin
+  }
+
+handleCreatePost : Model -> Cmd Msg
+handleCreatePost model =
+  case model.user of 
+    Nothing -> Cmd.none
+    Just user ->
+      Http.post {
+        url = "/v1/createPost",
+        body = multipartBody [
+          stringPart "username" user.username,
+          stringPart "title" model.title,
+          stringPart "subtext" model.subtext,
+          stringPart "content" model.content,
+          stringPart "category" model.category
+        ],
+        expect = Http.expectJson CreatePostResult processCreatePost
+      }
 
 type alias Document msg = {
   title: String,
@@ -194,9 +244,10 @@ renderModel model =
       case model.route of
         Just route -> case route of
           Home -> div [] [h1 [] [text "Welcome to my blog."],cardListing model]
-          PostView _ -> div [] [h1 [] [text (model.header)], p [] [text(model.content)], h3 [] [text(model.footer ++ " ")]]
+          PostView _ -> div [] [h1 [] [text (model.header)], p [] [text(model.body)], h3 [] [text(model.footer ++ " ")]]
           CategoryView _ -> div [] [h1 [] [text (model.header)], cardListing model]
           LoginView -> loginForm model
+          CreatePostView -> createPostForm model
           _ -> h1 [] [ text ("Not found."), a [ href "/"] [text("Return home")] ]
         _ -> h1 [] [ text ("Not found."), a [ href "/"] [text("Return home")] ]
 cardListing : Model -> Html Msg
@@ -257,14 +308,33 @@ renderPost post =
       ]
   ]
 
+createPostForm : Model -> Html Msg
+createPostForm model =
+  div [
+    style "display" "flex",
+    style "flex-direction" "column"
+  ] [
+    viewInput "text" "title" "Title" model.title TitleUpdate,
+    viewInput "text" "subtext" "Subtext" model.subtext SubtextUpdate,
+    viewTextarea "content" "Content" model.content ContentUpdate,
+    button [onClick CreatePost] [text "Create Post"]
+  ]
+
 loginForm : Model -> Html Msg
 loginForm model =
-  div [] [
-    viewInput "text" "username" "Username" model.username Username,
-    viewInput "password" "password" "Password" model.password Password,
+  div [
+    style "display" "flex",
+    style "flex-direction" "column"
+  ] [
+    viewInput "text" "username" "Username" model.username UsernameUpdate,
+    viewInput "password" "password" "Password" model.password PasswordUpdate,
     button [onClick Login] [text "Login"]
   ]
 
 viewInput : String -> String -> String -> String -> (String -> msg) -> Html msg
 viewInput t n p v toMsg =
   input [ name n, type_ t, placeholder p, value v, onInput toMsg ] []
+
+viewTextarea : String -> String -> String -> (String -> msg) -> Html msg
+viewTextarea n p v toMsg =
+  textarea [ name n, placeholder p, value v, onInput toMsg ] []
