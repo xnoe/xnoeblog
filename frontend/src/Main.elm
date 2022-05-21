@@ -34,7 +34,8 @@ type alias Post = {
   id: String,
   category: Category,
   title: String,
-  subtext: String
+  subtext: String,
+  content: String
   }
 
 type Route
@@ -45,6 +46,7 @@ type Route
   | LoginView
   | LogoutView
   | CreatePostView
+  | EditPostView
 
 routeParser : P.Parser (Route -> a) a
 routeParser =
@@ -61,16 +63,16 @@ routeParser =
 processPostListing : Decoder (List Post)
 processPostListing = 
   Json.Decode.list (
-    map5(\a->\b->\c->\d->\e-> Post a (Category b c) d e) (field "id" string) (field "catid" string) (field "category" string) (field "title" string) (field "subtext" string)
+    map5(\a->\b->\c->\d->\e-> Post a (Category b c) d e "") (field "id" string) (field "catid" string) (field "category" string) (field "title" string) (field "subtext" string)
   )
 
 processCategoryListing : Decoder (List Category)
 processCategoryListing =
   Json.Decode.list (map2 Category (field "id" string) (field "name" string))
 
-processPost : Decoder (String, String, String)
+processPost : Decoder {title: String, content: String, subtext: String, category: Category}
 processPost = 
-  map3 (\a -> \b -> \c -> (a,b,c)) (field "title" string) (field "content" string) (field "category" string)
+  map5 (\a -> \b -> \c -> \d -> \e -> {title=a,content=b,subtext=e,category=(Category c d)}) (field "title" string) (field "content" string) (field "catid" string) (field "category" string) (field "subtext" string)
 
 processCategory : Decoder (String, List Post)
 processCategory =
@@ -78,6 +80,12 @@ processCategory =
 
 processLogout : Decoder (Bool)
 processLogout = 
+  Json.Decode.map (\a -> case a of 
+    "true" -> True
+    _ -> False) (field "success" string)
+
+processDeletePost : Decoder (Bool)
+processDeletePost = 
   Json.Decode.map (\a -> case a of 
     "true" -> True
     _ -> False) (field "success" string)
@@ -90,6 +98,12 @@ processLogin =
 
 processCreatePost : Decoder (Maybe String)
 processCreatePost =
+  map2 (\a->\b->case a of 
+    "true" -> Just b
+    _ -> Nothing) (field "success" string) (field "postid" string)
+
+processEditPost : Decoder (Maybe String)
+processEditPost =
   map2 (\a->\b->case a of 
     "true" -> Just b
     _ -> Nothing) (field "success" string) (field "postid" string)
@@ -127,10 +141,7 @@ type alias Model = {
   username: String,
   password: String,
   user: Maybe User,
-  title: String,
-  subtext: String,
-  content: String,
-  category: String
+  post: Post
   }
 
 type Msg
@@ -138,7 +149,7 @@ type Msg
   | UrlChanged Url.Url
   | GotPosts (Result Http.Error (List Post))
   | GotCategories (Result Http.Error (List Category))
-  | GotPost (Result Http.Error (String, String, String))
+  | GotPost (Result Http.Error {title: String, content: String, subtext: String, category: Category})
   | GotCategory (Result Http.Error (String, List Post))
   | LoginResult (Result Http.Error (Maybe User))
   | UsernameUpdate String
@@ -152,7 +163,13 @@ type Msg
   | CategoryUpdate String
   | CreatePost
   | CreatePostResult (Result Http.Error (Maybe String))
+  | DeletePostResult (Result Http.Error Bool)
+  | EditPostResult (Result Http.Error (Maybe String))
   | GotWhoami (Result Http.Error (Maybe String))
+  | GotoEditPost
+  | GotoDeletePost
+  | EditPost
+  | DeletePost
 
 init : () -> Url.Url -> Browser.Navigation.Key -> (Model, Cmd Msg)
 init _ url key =
@@ -161,7 +178,7 @@ init _ url key =
       header = "", body = "", footer = "", pinnedPosts = [], 
       posts = [], route = r, key = key, errMessage = Nothing,
       username = "", password = "", user = Nothing,
-      title = "", subtext = "", content = "", category = "Blog Post"
+      post = Post "" (Category "" "") "" "" ""
     },
     Http.get {url = "/v1/whoami", expect = Http.expectJson GotWhoami processWhoami}
   )
@@ -176,11 +193,16 @@ update msg model =
     UrlChanged req ->
       (
         let r = P.parse routeParser req in
-        ({model | route = r}, messageOfRoute r)
+        let imodel = case r of
+              Just CreatePostView -> {model | post = Post "" (Category "" "") "" "" ""}
+              Just (PostView p) -> let post = model.post in {model | post = {post | id = p}}
+              _ -> model
+        in
+        ({imodel | route = r}, messageOfRoute r)
       )
     GotPosts (Ok l) -> ({model | errMessage = Nothing, posts = l}, Cmd.none)
     GotPosts (Err _) -> ({model | errMessage = Just "Failed to load posts"}, Cmd.none)
-    GotPost (Ok (title, content, category)) -> ({model | errMessage = Nothing, header = title, body = content, footer = category}, Cmd.none)
+    GotPost (Ok {title, content, subtext, category}) -> let post = model.post in ({model | post = {post | title = title, content = content, category = category, subtext = subtext}}, Cmd.none)
     GotCategory (Ok (title, posts)) -> ({model | errMessage = Nothing, header = title, posts = posts}, Cmd.none)
     Login -> (model, handleLogin model)
     LoginResult (Ok (Just _ as u)) -> ({model | user = u}, load "/")
@@ -189,15 +211,21 @@ update msg model =
     LogoutResult _ -> (model, load "/")
     UsernameUpdate u -> ({model | username = u}, Cmd.none)
     PasswordUpdate p -> ({model | password = p}, Cmd.none)
-    TitleUpdate t -> ({model | title = t}, Cmd.none)
-    SubtextUpdate s -> ({model | subtext = s}, Cmd.none)
-    ContentUpdate c -> ({model | content = c}, Cmd.none)
-    CategoryUpdate c -> ({model | category = c}, Cmd.none)
+    TitleUpdate t -> let post = model.post in ({model | post = {post | title = t}}, Cmd.none)
+    SubtextUpdate s -> let post = model.post in ({model | post = {post | subtext = s}}, Cmd.none)
+    ContentUpdate c -> let post = model.post in ({model | post = {post | content = c}}, Cmd.none)
+    CategoryUpdate c -> let post = model.post in let category = model.post.category in ({model | post = {post | category = {category | name = c}}}, Cmd.none)
     CreatePost -> (model, handleCreatePost model)
     CreatePostResult (Ok (Just postid)) -> (model, load ("/post/" ++ postid))
     CreatePostResult (Ok Nothing) -> ({model | errMessage = Just "Failed to create post"}, Cmd.none)
+    DeletePostResult (Ok True) -> (model, load "/")
+    DeletePostResult (Ok False) -> ({model | errMessage = Just "Failed to delete post"}, Cmd.none)
     GotWhoami (Ok (Just u)) -> ({model | user = Just (User u)}, messageOfRoute model.route)
     GotWhoami _ -> (model, messageOfRoute model.route)
+    GotoEditPost -> ({model | route = Just EditPostView}, Cmd.none)
+    EditPost -> (model, handleEditPost model)
+    EditPostResult (Ok (Just postid)) -> (model, load ("/post/" ++ postid))
+    DeletePost -> (model, handleDeletePost model)
     _ -> ({model | errMessage = Just "Something has gone horribly wrong."}, Cmd.none)
 
 handleLogin : Model -> Cmd Msg
@@ -217,12 +245,44 @@ handleCreatePost model =
         url = "/v1/createPost",
         body = multipartBody [
           stringPart "username" user.username,
-          stringPart "title" model.title,
-          stringPart "subtext" model.subtext,
-          stringPart "content" model.content,
-          stringPart "category" model.category
+          stringPart "title" model.post.title,
+          stringPart "subtext" model.post.subtext,
+          stringPart "content" model.post.content,
+          stringPart "category" model.post.category.name
         ],
         expect = Http.expectJson CreatePostResult processCreatePost
+      }
+
+handleEditPost : Model -> Cmd Msg
+handleEditPost model =
+  case model.user of 
+    Nothing -> Cmd.none
+    Just user ->
+      Http.post {
+        url = "/v1/editPost",
+        body = multipartBody [
+          stringPart "username" user.username,
+          stringPart "id" model.post.id,
+          stringPart "title" model.post.title,
+          stringPart "subtext" model.post.subtext,
+          stringPart "content" model.post.content,
+          stringPart "category" model.post.category.name
+        ],
+        expect = Http.expectJson EditPostResult processEditPost
+      }
+
+handleDeletePost : Model -> Cmd Msg
+handleDeletePost model =
+  case model.user of 
+    Nothing -> Cmd.none
+    Just user ->
+      Http.post {
+        url = "/v1/deletePost",
+        body = multipartBody [
+          stringPart "username" user.username,
+          stringPart "id" model.post.id
+        ],
+        expect = Http.expectJson DeletePostResult processDeletePost
       }
 
 type alias Document msg = {
@@ -263,10 +323,13 @@ renderModel model =
       case model.route of
         Just route -> case route of
           Home -> div [] [h1 [] [text "Welcome to my blog."],cardListing model]
-          PostView _ -> div [] [h1 [] [text (model.header)], p [] [text(model.body)], h3 [] [text(model.footer ++ " ")]]
+          PostView _ -> div [] ([h1 [] [text (model.post.title)], p [] [text(model.post.content)], h3 [] [text(model.post.category.name ++ " ")]] ++ case model.user of
+            Nothing -> []
+            Just u -> [a [href "", onClick DeletePost] [text "Delete Post"], text " - ", a [href "", onClick GotoEditPost] [text "Edit Post"]])
           CategoryView _ -> div [] [h1 [] [text (model.header)], cardListing model]
           LoginView -> loginForm model
-          CreatePostView -> createPostForm model
+          CreatePostView -> createPostForm model CreatePost "Create Post"
+          EditPostView -> createPostForm model EditPost "Edit Post"
           _ -> h1 [] [ text ("Not found."), a [ href "/"] [text("Return home")] ]
         _ -> h1 [] [ text ("Not found."), a [ href "/"] [text("Return home")] ]
 cardListing : Model -> Html Msg
@@ -327,17 +390,17 @@ renderPost post =
       ]
   ]
 
-createPostForm : Model -> Html Msg
-createPostForm model =
+createPostForm : Model -> Msg -> String -> Html Msg
+createPostForm model msg buttonText =
   div [
     style "display" "flex",
     style "flex-direction" "column"
   ] [
-    viewInput "text" "title" "Title" model.title TitleUpdate,
-    viewInput "text" "subtext" "Subtext" model.subtext SubtextUpdate,
-    viewTextarea "content" "Content" model.content ContentUpdate,
-    viewInput "text" "category" "Subtext" model.category CategoryUpdate,
-    button [onClick CreatePost] [text "Create Post"]
+    viewInput "text" "title" "Title" model.post.title TitleUpdate,
+    viewInput "text" "subtext" "Subtext" model.post.subtext SubtextUpdate,
+    viewTextarea "content" "Content" model.post.content ContentUpdate,
+    viewInput "text" "category" "Blog Post" model.post.category.name CategoryUpdate,
+    button [onClick msg] [text buttonText]
   ]
 
 loginForm : Model -> Html Msg

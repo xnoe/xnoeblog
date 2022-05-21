@@ -90,18 +90,19 @@ getPostsInCategory c cat page = do
 
 getPostContent :: IConnection t => t -> Int -> IO (Maybe JSValue)
 getPostContent c pid = do
-  getPost <- prepare c "SELECT title, catid, content FROM posts WHERE postid = ?;"
+  getPost <- prepare c "SELECT title, catid, content, subtext FROM posts WHERE postid = ?;"
   execute getPost [toSql (pid)]
   result <- fetchAllRows getPost
 
   case result of
-    (t:cid:con:[]):[] -> do
+    (t:cid:con:sub:[]):[] -> do
       category <- getCategory c $ fromSql cid
       let title = ("title", toJSString $ fromSql t)
       let content = ("content", toJSString $ fromSql con)
       let cat = ("category", toJSString category)
       let catid = ("catid", toJSString $ fromSql cid)
-      return $ Just $ showJSON $ toJSObject [title, content, cat, catid];
+      let subtext = ("subtext", toJSString $ fromSql sub)
+      return $ Just $ showJSON $ toJSObject [title, content, cat, catid, subtext];
     _ -> fail "Post does not exist!"
 
 hexOfBS :: B.ByteString -> String
@@ -180,12 +181,11 @@ attemptCreatePost c authtoken username title subtext content category = do
   case cookieValid of
     False -> return Nothing
     True -> do
-      -- First we should probably validate that the category actually exists
+      -- Create the category if it doesn't exist
       result <- createCategoryIfNotExist c category
       case result of
         Nothing -> do return Nothing
         Just catid -> do
-          -- If we're here, we know the category does actually exist
           addPost <- prepare c "INSERT INTO posts(catid, title, subtext, content) VALUES(?, ?, ?, ?) RETURNING postid;"
           execute addPost [toSql catid, toSql title, toSql subtext, toSql content]
           post <- fetchAllRows addPost
@@ -209,6 +209,77 @@ handleCreatePost c = do
   case success of 
     Just pid -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("postid", toJSString pid)]
     Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("postid", toJSString "")]
+
+attemptEditPost :: IConnection t => t -> String -> String -> String -> String -> String -> String -> String -> IO (Maybe String)
+attemptEditPost c authtoken username title subtext content category id = do
+  cookieValid <- validateCookie c authtoken username
+  case cookieValid of
+    False -> return Nothing
+    True -> do
+      -- Determine if the postid we're trying to update exists
+      postExists <- prepare c "SELECT * FROM posts WHERE postid = ?;"
+      execute postExists [toSql id]
+      exists <- fetchAllRows postExists
+      
+      case exists of
+        [] -> return Nothing
+        [_] -> do
+          -- Create the category if it doesn't exist
+          result <- createCategoryIfNotExist c category
+          case result of
+            Nothing -> do return Nothing
+            Just catid -> do
+              addPost <- prepare c "UPDATE posts SET catid = ?, title = ?, subtext = ?, content = ? WHERE postid = ?"
+              execute addPost [toSql catid, toSql title, toSql subtext, toSql content, toSql id]
+              commit c
+              return $ Just id
+
+handleEditPost :: IConnection t => t -> ServerPart Response
+handleEditPost c = do
+  methodM POST
+  authtoken <- lookCookieValue "token"
+  username <- look "username"
+  title <- look "title"
+  subtext <- look "subtext"
+  content <- look "content"
+  category <- look "category"
+  postid <- look "id"
+
+  success <- lift $ attemptEditPost c authtoken username title subtext content category postid
+  case success of 
+    Just pid -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("postid", toJSString pid)]
+    Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("postid", toJSString "")]
+
+attemptDeletePost :: IConnection t => t -> String -> String -> String -> IO (Bool)
+attemptDeletePost c authtoken username id = do
+  cookieValid <- validateCookie c authtoken username
+  case cookieValid of
+    False -> return False
+    True -> do
+      -- Determine if the postid we're trying to update exists
+      postExists <- prepare c "SELECT * FROM posts WHERE postid = ?;"
+      execute postExists [toSql id]
+      exists <- fetchAllRows postExists
+      
+      case exists of
+        [] -> return False
+        [_] -> do
+          deletePost <- prepare c "DELETE FROM posts WHERE postid = ?;"
+          execute deletePost [toSql id]
+          commit c
+          return True
+
+handleDeletePost :: IConnection t => t -> ServerPart Response
+handleDeletePost c = do
+  methodM POST
+  authtoken <- lookCookieValue "token"
+  username <- look "username"
+  postid <- look "id"
+
+  success <- lift $ attemptDeletePost c authtoken username postid
+  case success of 
+    True -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
+    False -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false")]
 
 attemptWhoami :: IConnection t => t -> String -> IO (Maybe String)
 attemptWhoami c at = do
@@ -253,5 +324,7 @@ main = do
          , dir "v1" $ dir "logout" $ do
             expireCookie "token"
             ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
+         , dir "v1" $ dir "editPost" $ handleEditPost c
+         , dir "v1" $ dir "deletePost" $ handleDeletePost c
          , notFound $ toResponse "Endpoint does not exist"
          ]
