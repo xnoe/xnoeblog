@@ -299,19 +299,20 @@ htmlView model =
   div [
     style "flex-direction" "column",
     style "margin" "0",
-    style "padding" "0"
+    style "padding" "0",
+    style "font-family" "sans-serif"
   ] [
     div [
       style "border-bottom" "2px solid black",
       style "height" "1.5em",
       style "padding" "5px"
     ] ([
-      a [href "/"] [text "Home"],
+      xa [href "/"] [text "Home"],
       text " - "
     ] ++
       case model.user of 
-        Nothing -> [a [href "/login"] [text "Login"]]
-        Just u -> [a [onClick Logout] [text "Logout"], text " - ", a [href "/create"] [text "Create Post"]]
+        Nothing -> [xa [href "/login"] [text "Login"]]
+        Just u -> [xa [onClick Logout] [text "Logout"], text " - ", xa [href "/create"] [text "Create Post"]]
     ),
     renderModel model
   ]
@@ -322,16 +323,16 @@ renderModel model =
     Nothing ->
       case model.route of
         Just route -> case route of
-          Home -> div [] [h1 [] [text "Welcome to my blog."],cardListing model]
+          Home -> div [style "padding" "5px"] [h1 [] [text "Welcome to my blog."],cardListing model]
           PostView _ -> div [] ([h1 [] [text (model.post.title)], p [] [text(model.post.content)], h3 [] [text(model.post.category.name ++ " ")]] ++ case model.user of
             Nothing -> []
-            Just u -> [a [href "", onClick DeletePost] [text "Delete Post"], text " - ", a [href "", onClick GotoEditPost] [text "Edit Post"]])
-          CategoryView _ -> div [] [h1 [] [text (model.header)], cardListing model]
+            Just u -> [xa [href "", onClick DeletePost] [text "Delete Post"], text " - ", xa [href "", onClick GotoEditPost] [text "Edit Post"]])
+          CategoryView _ -> div [style "padding" "5px"] [h1 [] [text (model.header)], cardListing model]
           LoginView -> loginForm model
           CreatePostView -> createPostForm model CreatePost "Create Post"
           EditPostView -> createPostForm model EditPost "Edit Post"
-          _ -> h1 [] [ text ("Not found."), a [ href "/"] [text("Return home")] ]
-        _ -> h1 [] [ text ("Not found."), a [ href "/"] [text("Return home")] ]
+          _ -> h1 [] [ text ("Not found."), xa [ href "/"] [text("Return home")] ]
+        _ -> h1 [] [ text ("Not found."), xa [ href "/"] [text("Return home")] ]
 cardListing : Model -> Html Msg
 cardListing model =
   div [
@@ -366,7 +367,7 @@ renderPost post =
           style "font-weight" "bold",
           style "border-radius" "10px 10px 0 0"
         ] [
-          a [style "text-align" "center", href ("/post/" ++ post.id)] [text (post.title)]
+          xa [style "text-align" "center", href ("/post/" ++ post.id)] [text (post.title)]
         ],
         div [
           style "flex-grow" "1",
@@ -385,7 +386,7 @@ renderPost post =
           style "padding" "10px",
           style "border-radius" "0 0 10px 10px"
         ] [
-          text ("Category: "), a [href ("/category/" ++ post.category.id)] [text (post.category.name)]
+          text ("Category: "), xa [href ("/category/" ++ post.category.id)] [text (post.category.name)]
         ]
       ]
   ]
@@ -421,3 +422,10 @@ viewInput t n p v toMsg =
 viewTextarea : String -> String -> String -> (String -> msg) -> Html msg
 viewTextarea n p v toMsg =
   textarea [ name n, placeholder p, value v, onInput toMsg ] []
+
+xa : List (Attribute msg) -> List (Html msg) -> Html msg
+xa x y =
+  a (x ++ [
+    style "text-decoration" "none",
+    style "color" "#aa66ff"
+  ]) y
