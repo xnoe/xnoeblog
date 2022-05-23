@@ -41,8 +41,9 @@ type alias Post = {
 type Route
   = Home
   | CategoriesView
-  | CategoryView String
+  | CategoryPageView (String, String)
   | PostView String
+  | PostPageView String
   | LoginView
   | LogoutView
   | CreatePostView
@@ -51,32 +52,42 @@ type Route
 routeParser : P.Parser (Route -> a) a
 routeParser =
   P.oneOf
-    [ P.map Home P.top
+    [ P.map (PostPageView "1") P.top
+    , P.map PostPageView (P.s "post" </> P.s "page" </> P.string)
     , P.map CategoriesView (P.s "categories")
-    , P.map CategoryView (P.s "category" </> P.string)
+    , P.map (\a -> \b -> CategoryPageView (b,a)) (P.s "category" </> P.string </> P.s "page" </> P.string)
+    , P.map (\a -> CategoryPageView ("1",a)) (P.s "category" </> P.string)
     , P.map PostView (P.s "post" </> P.string)
     , P.map LoginView (P.s "login")
     , P.map LogoutView (P.s "logout")
     , P.map CreatePostView (P.s "create")
     ]
 
-processPostListing : Decoder (List Post)
-processPostListing = 
+processPostList : Decoder (List Post)
+processPostList = 
   Json.Decode.list (
     map5(\a->\b->\c->\d->\e-> Post a (Category b c) d e "") (field "id" string) (field "catid" string) (field "category" string) (field "title" string) (field "subtext" string)
   )
 
-processCategoryListing : Decoder (List Category)
-processCategoryListing =
+processPostListing : Decoder (Maybe Int, List Post)
+processPostListing =
+  map2 (\a -> \b -> (String.toInt a,b)) (field "total" string) (field "posts" processPostList)
+
+processCategoryList : Decoder (List Category)
+processCategoryList =
   Json.Decode.list (map2 Category (field "id" string) (field "name" string))
+
+processCategoryListing : Decoder (Maybe Int, List Category)
+processCategoryListing =
+  map2 (\a -> \b -> (String.toInt a, b)) (field "total" string) (field "categories" processCategoryList)
 
 processPost : Decoder {title: String, content: String, subtext: String, category: Category}
 processPost = 
   map5 (\a -> \b -> \c -> \d -> \e -> {title=a,content=b,subtext=e,category=(Category c d)}) (field "title" string) (field "content" string) (field "catid" string) (field "category" string) (field "subtext" string)
 
-processCategory : Decoder (String, List Post)
+processCategory : Decoder (Maybe Int, String, List Post)
 processCategory =
-  map2 (\a -> \b -> (a,b)) (field "category" string) (field "posts" processPostListing)
+  map3 (\a -> \b -> \c -> (String.toInt a,b,c)) (field "total" string) (field "category" string) (field "posts" processPostList)
 
 processLogout : Decoder (Bool)
 processLogout = 
@@ -114,15 +125,15 @@ processWhoami =
     "true" -> Just b
     _ -> Nothing) (field "success" string) (field "username" string)
 
-messageOfRoute : Maybe Route -> Cmd Msg
-messageOfRoute r =
-  case r of
+messageOfRoute : Model -> Cmd Msg
+messageOfRoute model =
+  case model.route of
     Just route -> 
       case route of
-        Home -> Http.get {url = "/v1/posts", expect = Http.expectJson GotPosts processPostListing}
-        CategoriesView -> Http.get {url = "/v1/categories", expect = Http.expectJson GotCategories processCategoryListing}
+        PostPageView _ -> Http.get {url = "/v1/posts?page=" ++ (String.fromInt model.page), expect = Http.expectJson GotPosts processPostListing}
+        CategoriesView -> Http.get {url = "/v1/categories?page=" ++ (String.fromInt model.page), expect = Http.expectJson GotCategories processCategoryListing}
         PostView p -> Http.get {url = "/v1/post/" ++ p, expect = Http.expectJson GotPost processPost}
-        CategoryView c -> Http.get {url = "/v1/category/" ++ c, expect = Http.expectJson GotCategory processCategory}
+        CategoryPageView (_,c) -> Http.get {url = "/v1/category/" ++ c ++ "?page=" ++ (String.fromInt model.page), expect = Http.expectJson GotCategory processCategory}
         _ -> Cmd.none
     Nothing -> Cmd.none
 
@@ -141,16 +152,18 @@ type alias Model = {
   username: String,
   password: String,
   user: Maybe User,
-  post: Post
+  post: Post,
+  page: Int,
+  totalPages: Int
   }
 
 type Msg
   = LinkClinked Browser.UrlRequest
   | UrlChanged Url.Url
-  | GotPosts (Result Http.Error (List Post))
-  | GotCategories (Result Http.Error (List Category))
+  | GotPosts (Result Http.Error ((Maybe Int, List Post)))
+  | GotCategories (Result Http.Error ((Maybe Int, List Category)))
   | GotPost (Result Http.Error {title: String, content: String, subtext: String, category: Category})
-  | GotCategory (Result Http.Error (String, List Post))
+  | GotCategory (Result Http.Error (Maybe Int, String, List Post))
   | LoginResult (Result Http.Error (Maybe User))
   | UsernameUpdate String
   | PasswordUpdate String
@@ -174,11 +187,20 @@ type Msg
 init : () -> Url.Url -> Browser.Navigation.Key -> (Model, Cmd Msg)
 init _ url key =
   let r = P.parse routeParser url in
+  let p = (case r of
+        Just (PostPageView n) -> case (String.toInt n) of
+          Just m -> (m-1)
+          Nothing -> 0
+        Just (CategoryPageView (n,_)) -> case (String.toInt n) of
+          Just m -> (m-1)
+          Nothing -> 0
+        _ -> 0) in
   ({
       header = "", body = "", footer = "", pinnedPosts = [], 
       posts = [], route = r, key = key, errMessage = Nothing,
       username = "", password = "", user = Nothing,
-      post = Post "" (Category "" "") "" "" ""
+      post = Post "" (Category "" "") "" "" "", page = p,
+      totalPages = 1
     },
     Http.get {url = "/v1/whoami", expect = Http.expectJson GotWhoami processWhoami}
   )
@@ -196,14 +218,22 @@ update msg model =
         let imodel = case r of
               Just CreatePostView -> {model | post = Post "" (Category "" "") "" "" ""}
               Just (PostView p) -> let post = model.post in {model | post = {post | id = p}}
+              Just Home -> {model | page=0}
+              Just CategoriesView -> {model | page=0}
+              Just (PostPageView page) -> case String.toInt page of
+                Just p -> {model | page = p-1}
+                _ -> model
+              Just (CategoryPageView (page,_)) -> case String.toInt page of
+                Just p -> {model | page = p-1}
+                _ -> model
               _ -> model
         in
-        ({imodel | route = r}, messageOfRoute r)
+        let m = {imodel | route = r} in (m, messageOfRoute m)
       )
-    GotPosts (Ok l) -> ({model | errMessage = Nothing, posts = l}, Cmd.none)
+    GotPosts (Ok (Just t, l)) -> ({model | errMessage = Nothing, posts = l, totalPages = ceiling ((toFloat t) / 20)}, Cmd.none)
     GotPosts (Err _) -> ({model | errMessage = Just "Failed to load posts"}, Cmd.none)
     GotPost (Ok {title, content, subtext, category}) -> let post = model.post in ({model | post = {post | title = title, content = content, category = category, subtext = subtext}}, Cmd.none)
-    GotCategory (Ok (title, posts)) -> ({model | errMessage = Nothing, header = title, posts = posts}, Cmd.none)
+    GotCategory (Ok (Just t, title, posts)) -> ({model | errMessage = Nothing, header = title, posts = posts, totalPages = ceiling ((toFloat t) / 20)}, Cmd.none)
     Login -> (model, handleLogin model)
     LoginResult (Ok (Just _ as u)) -> ({model | user = u}, load "/")
     LoginResult (Ok (Nothing)) -> ({model | errMessage = Just "Invalid username or password."}, Cmd.none)
@@ -220,8 +250,8 @@ update msg model =
     CreatePostResult (Ok Nothing) -> ({model | errMessage = Just "Failed to create post"}, Cmd.none)
     DeletePostResult (Ok True) -> (model, load "/")
     DeletePostResult (Ok False) -> ({model | errMessage = Just "Failed to delete post"}, Cmd.none)
-    GotWhoami (Ok (Just u)) -> ({model | user = Just (User u)}, messageOfRoute model.route)
-    GotWhoami _ -> (model, messageOfRoute model.route)
+    GotWhoami (Ok (Just u)) -> let m = {model | user = Just (User u)} in (m, messageOfRoute m)
+    GotWhoami _ -> (model, messageOfRoute model)
     GotoEditPost -> ({model | route = Just EditPostView}, Cmd.none)
     EditPost -> (model, handleEditPost model)
     EditPostResult (Ok (Just postid)) -> (model, load ("/post/" ++ postid))
@@ -323,22 +353,38 @@ renderModel model =
     Nothing ->
       case model.route of
         Just route -> case route of
-          Home -> div [style "padding" "5px"] [h1 [] [text "Welcome to my blog."],cardListing model]
+          PostPageView _ -> div [style "padding" "5px"] [h1 [] [text "Welcome to my blog."],cardListing model "/post"]
           PostView _ -> div [] ([h1 [] [text (model.post.title)], p [] [text(model.post.content)], h3 [] [text(model.post.category.name ++ " ")]] ++ case model.user of
             Nothing -> []
             Just u -> [xa [href "", onClick DeletePost] [text "Delete Post"], text " - ", xa [href "", onClick GotoEditPost] [text "Edit Post"]])
-          CategoryView _ -> div [style "padding" "5px"] [h1 [] [text (model.header)], cardListing model]
+          CategoryPageView (_,c) -> div [style "padding" "5px"] [h1 [] [text (model.header)], cardListing model ("/category/" ++ c)]
           LoginView -> loginForm model
           CreatePostView -> createPostForm model CreatePost "Create Post"
           EditPostView -> createPostForm model EditPost "Edit Post"
           _ -> h1 [] [ text ("Not found."), xa [ href "/"] [text("Return home")] ]
         _ -> h1 [] [ text ("Not found."), xa [ href "/"] [text("Return home")] ]
-cardListing : Model -> Html Msg
-cardListing model =
+cardListing : Model -> String -> Html Msg
+cardListing model prefix =
   div [
-    style "display" "grid",
-    style "grid-template-columns" "repeat(auto-fill, minmax(16rem, 1fr))"
-    ] (List.map renderPost model.posts)
+    style "display" "flex",
+    style "flex-direction" "column",
+    style "align-items" "center"
+  ] [
+    div [
+      style "width" "100%",
+      style "display" "grid",
+      style "grid-template-columns" "repeat(auto-fill, minmax(16rem, 1fr))"
+    ] (List.map renderPost model.posts),
+    viewPaginator model prefix
+  ]
+
+viewPaginator : Model -> String -> Html Msg
+viewPaginator model prefix =
+  p [] (List.indexedMap (\i -> \x -> if i /= model.page then 
+    span [] [xa [href (prefix ++ "/page/" ++ (String.fromInt (i+1)))] [text (String.fromInt (i+1))], text (if i == (model.totalPages-1) then "" else ",")]
+  else
+    span [] [span [] [text (String.fromInt (i+1))], text (if i == (model.totalPages-1) then "" else ",")]
+    ) (List.range 1 model.totalPages))
 
 renderPost : Post -> Html Msg
 renderPost post =

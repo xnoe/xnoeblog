@@ -42,6 +42,11 @@ getPostListing c page = do
   execute getPosts [toSql (page)]
   result <- fetchAllRows getPosts
 
+  getTotalRows <- prepare c "SELECT COUNT(*) FROM posts;"
+  execute getTotalRows []
+  t <- fetchAllRows getTotalRows
+  let [total:[]] = t
+
   posts <- sequence $
     map (\(pid:cid:t:subtext:content:[]) -> do 
     category <- getCategory c $ fromSql cid
@@ -52,7 +57,7 @@ getPostListing c page = do
     let catid = ("catid", toJSString $ fromSql cid)
     return $ showJSON $ toJSObject [id, title, sub, cat, catid]
     ) result
-  return $ Just $ showJSON $ JSArray posts
+  return $ Just $ showJSON $ toJSObject [("posts", showJSON $ JSArray posts), ("total", showJSON $ toJSString $ fromSql $ total)]
 
 getCategoryListing :: IConnection t => t -> Int -> IO (Maybe JSValue)
 getCategoryListing c page = do
@@ -60,13 +65,18 @@ getCategoryListing c page = do
   execute getCategories [toSql (page)]
   result <- fetchAllRows getCategories
 
+  getTotalRows <- prepare c "SELECT COUNT(*) FROM categories;"
+  execute getTotalRows []
+  t <- fetchAllRows getTotalRows
+  let [total:[]] = t
+
   categories <- sequence $
     map (\(cid:n:[]) -> do
     let id = ("id", toJSString $ show $ (fromSql cid::Int))
     let name = ("name", toJSString $ fromSql n)
     return $ showJSON $ toJSObject [id, name]
     ) result
-  return $ Just $ showJSON $ JSArray categories
+  return $ Just $ showJSON $ toJSObject [("categories", showJSON $ JSArray categories), ("total", showJSON $ toJSString $ fromSql total)]
 
 getPostsInCategory :: IConnection t => t -> Int -> Int -> IO (Maybe JSValue)
 getPostsInCategory c cat page = do
@@ -75,6 +85,11 @@ getPostsInCategory c cat page = do
   result <- fetchAllRows getPosts
 
   category <- getCategory c cat
+
+  getTotalRows <- prepare c "SELECT COUNT(*) FROM posts WHERE catid = ?;"
+  execute getTotalRows [toSql cat]
+  t <- fetchAllRows getTotalRows
+  let [total:[]] = t
 
   posts <- sequence $
     map (\(pid:cid:t:subtext:content:[]) -> do
@@ -86,7 +101,7 @@ getPostsInCategory c cat page = do
     return $ showJSON $ toJSObject [id, cat, title, sub, catid]
     ) result
   
-  return $ Just $ showJSON $ toJSObject [("category", showJSON $ toJSString category), ("posts", showJSON $ JSArray posts)]
+  return $ Just $ showJSON $ toJSObject [("total", showJSON $ toJSString $ fromSql total), ("category", showJSON $ toJSString category), ("posts", showJSON $ JSArray posts)]
 
 getPostContent :: IConnection t => t -> Int -> IO (Maybe JSValue)
 getPostContent c pid = do
@@ -315,9 +330,27 @@ main = do
   simpleHTTP config $ do
     decodeBody (defaultBodyPolicy "/tmp/" 0 4096 4096)
     msum [ dir "v1" $ dir "post" $ path $ \pid -> require (getPostContent c pid) $ \post -> ok $ toResponse post
-         , dir "v1" $ dir "category" $ path $ \cid -> require (getPostsInCategory c cid 0) $ \cat -> ok $ toResponse cat
-         , dir "v1" $ dir "posts" $ require (getPostListing c 0) $ \posts -> ok $ toResponse posts
-         , dir "v1" $ dir "categories" $ require (getCategoryListing c 0) $ \cats -> ok $ toResponse cats
+         , dir "v1" $ dir "category" $ path $ \cid -> do
+            page <- look "page"
+            let p = read page :: Int
+            if (p < 0) then 
+              ok $ toResponse ""
+            else
+              require (getPostsInCategory c cid p) $ \cat -> ok $ toResponse cat
+         , dir "v1" $ dir "posts" $ do
+            page <- look "page"
+            let p = read page :: Int
+            if (p < 0) then 
+              ok $ toResponse ""
+            else 
+              require (getPostListing c p) $ \posts -> ok $ toResponse posts
+         , dir "v1" $ dir "categories" $ do
+            page <- look "page"
+            let p = read page :: Int
+            if (p < 0) then 
+              ok $ toResponse ""
+            else
+              require (getCategoryListing c p) $ \cats -> ok $ toResponse cats
          , dir "v1" $ dir "login" $ handleLogin c
          , dir "v1" $ dir "createPost" $ handleCreatePost c
          , dir "v1" $ dir "whoami" $ handleWhoami c
