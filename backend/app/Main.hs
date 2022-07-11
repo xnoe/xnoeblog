@@ -12,6 +12,7 @@ import Data.ByteString.Lazy.Char8 as L (pack)
 import Data.ByteString as B (unpack, ByteString)
 import Text.Printf
 import System.Random (newStdGen, randomRs)
+import System.ReadEnvVar (lookupEnv)
 
 import Crypto.Hash.SHA256 as SHA256
 
@@ -317,7 +318,34 @@ handleWhoami c = do
 
 main :: IO ()
 main = do
-  c <- connectPostgreSQL "host=database user=blog password=root dbname=blog"
+  dbhostvar <- lookupEnv "DB_HOST"
+  dbuservar <- lookupEnv "DB_USER"
+  dbpassvar <- lookupEnv "DB_PASS"
+  dbnamevar <- lookupEnv "DB_NAME"
+  uservar <- lookupEnv "XNOEBLOG_USER"
+  passvar <- lookupEnv "XNOEBLOG_PASS"
+
+  let dbhost = case dbhostvar of
+                Just h -> h
+                Nothing -> "db"
+  let dbuser = case dbuservar of 
+                Just u -> u
+                Nothing -> "root"
+  let dbpass = case dbpassvar of
+                Just p -> p
+                Nothing -> "password"
+  let dbname = case dbnamevar of
+                Just d -> d
+                Nothing -> "xnoeblog"
+
+  let user = case uservar of 
+                Just u -> u
+                Nothing -> ""
+  let pass = case passvar of
+                Just p -> p
+                Nothing -> ""
+
+  c <- connectPostgreSQL ("host=" ++ dbhost ++ " user=" ++ dbuser ++ " password=" ++ dbpass ++ " dbname=" ++ dbname)
 
   createPostsTable <- prepare c "CREATE TABLE IF NOT EXISTS posts(postid serial primary key, catid int, title varchar(128), subtext varchar(128), content text);"
   createCategoriesTable <- prepare c "CREATE TABLE IF NOT EXISTS categories(catid serial primary key, name varchar(128));"
@@ -326,7 +354,23 @@ main = do
   execute createCategoriesTable []
   execute createUsersTable []
   commit c
-  
+
+  queryUser <- prepare c "SELECT * from users WHERE username like ?;"
+  execute queryUser [toSql user]
+  userExists <- fetchAllRows queryUser
+  if user /= "" then
+    case userExists of 
+      [_] -> do return Nothing
+      [] -> do
+        let passwordHashBS = SHA256.hash (C.pack pass)
+        let passwordHash = hexOfBS passwordHashBS
+        createUser <- prepare c "INSERT INTO users(username, password) VALUES(?, ?);"
+        execute createUser [toSql user, toSql passwordHash]
+        commit c
+        return Nothing
+  else
+    do return Nothing
+
   simpleHTTP config $ do
     decodeBody (defaultBodyPolicy "/tmp/" 0 4096 4096)
     msum [ dir "v1" $ dir "post" $ path $ \pid -> require (getPostContent c pid) $ \post -> ok $ toResponse post

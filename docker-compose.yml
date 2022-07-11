@@ -2,22 +2,29 @@ version: '3.0'
 
 services: 
   frontend:
+    restart: unless-stopped
     build: ./frontend
+    image: registry.xnopyt.com/xnoeblog-frontend:latest
   
   backend:
+    restart: unless-stopped
     build: ./backend
+    image: registry.xnopyt.com/xnoeblog-backend:latest
     depends_on: 
       - database
   
   nginx:
+    restart: unless-stopped
     image: nginx:alpine
     ports:
       - 80:80
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
 
-  database:
+  db:
+    restart: unless-stopped
     image: postgres
     environment: 
-      - POSTGRES_PASSWORD=root
-      - POSTGRES_USER=blog
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_USER=root
+      - POSTGRES_DB=xnoeblog
