@@ -342,10 +342,26 @@ htmlView model =
     ] ++
       case model.user of 
         Nothing -> [xa [href "/login"] [text "Login"]]
-        Just u -> [xa [onClick Logout] [text "Logout"], text " - ", xa [href "/create"] [text "Create Post"]]
+        Just u -> [text ("Hello, " ++ u.username), text " - ", xa [onClick Logout, href "#"] [text "Logout"], text " - ", xa [href "/create"] [text "Create Post"]]
     ),
     renderModel model
   ]
+
+prod_list : List (Html Msg) -> String -> List Char -> List (Html Msg)
+prod_list accl accs chars =
+  case chars of
+    (hd::tl) ->
+      case hd of
+        '\n' -> prod_list (accl++[text accs, br [] []]) "" tl
+        '\r' -> prod_list accl accs tl
+        c -> prod_list (accl) (accs++(String.fromChar c)) tl
+    [] -> accl
+parseContent : String -> List (Html Msg)
+parseContent content =
+  let chars = String.toList content in
+  prod_list [] "" chars
+  
+
 renderModel : Model -> Html Msg
 renderModel model =
   case (model.errMessage) of
@@ -354,7 +370,7 @@ renderModel model =
       case model.route of
         Just route -> case route of
           PostPageView _ -> div [style "padding" "5px"] [h1 [] [text "Welcome to my blog."],cardListing model "/post"]
-          PostView _ -> div [] ([h1 [] [text (model.post.title)], p [] [text(model.post.content)], h3 [] [text(model.post.category.name ++ " ")]] ++ case model.user of
+          PostView _ -> div [] ([h1 [] [text (model.post.title)], div [style "margin-left" "10px", style "margin-right" "10px"] (parseContent model.post.content), h3 [] [text(model.post.category.name ++ " ")]] ++ case model.user of
             Nothing -> []
             Just u -> [xa [href "", onClick DeletePost] [text "Delete Post"], text " - ", xa [href "", onClick GotoEditPost] [text "Edit Post"]])
           CategoryPageView (_,c) -> div [style "padding" "5px"] [h1 [] [text (model.header)], cardListing model ("/category/" ++ c)]

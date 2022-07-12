@@ -316,8 +316,8 @@ handleWhoami c = do
     Just u -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("username", toJSString u)]
     Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("username", toJSString "")]
 
-main :: IO ()
-main = do
+appMain :: IO ()
+appMain = do
   dbhostvar <- lookupEnv "DB_HOST"
   dbuservar <- lookupEnv "DB_USER"
   dbpassvar <- lookupEnv "DB_PASS"
@@ -360,48 +360,55 @@ main = do
   userExists <- fetchAllRows queryUser
   if user /= "" then
     case userExists of 
-      [_] -> do return Nothing
+      [_] -> do return ()
       [] -> do
         let passwordHashBS = SHA256.hash (C.pack pass)
         let passwordHash = hexOfBS passwordHashBS
         createUser <- prepare c "INSERT INTO users(username, password) VALUES(?, ?);"
         execute createUser [toSql user, toSql passwordHash]
         commit c
-        return Nothing
+        return ()
   else
-    do return Nothing
+    do return ()
 
   simpleHTTP config $ do
     decodeBody (defaultBodyPolicy "/tmp/" 0 4096 4096)
-    msum [ dir "v1" $ dir "post" $ path $ \pid -> require (getPostContent c pid) $ \post -> ok $ toResponse post
-         , dir "v1" $ dir "category" $ path $ \cid -> do
+    msum [ dir "post" $ path $ \pid -> require (getPostContent c pid) $ \post -> ok $ toResponse post
+         , dir "category" $ path $ \cid -> do
             page <- look "page"
             let p = read page :: Int
             if (p < 0) then 
               ok $ toResponse ""
             else
               require (getPostsInCategory c cid p) $ \cat -> ok $ toResponse cat
-         , dir "v1" $ dir "posts" $ do
+         , dir "posts" $ do
             page <- look "page"
             let p = read page :: Int
             if (p < 0) then 
               ok $ toResponse ""
             else 
               require (getPostListing c p) $ \posts -> ok $ toResponse posts
-         , dir "v1" $ dir "categories" $ do
+         , dir "categories" $ do
             page <- look "page"
             let p = read page :: Int
             if (p < 0) then 
               ok $ toResponse ""
             else
               require (getCategoryListing c p) $ \cats -> ok $ toResponse cats
-         , dir "v1" $ dir "login" $ handleLogin c
-         , dir "v1" $ dir "createPost" $ handleCreatePost c
-         , dir "v1" $ dir "whoami" $ handleWhoami c
-         , dir "v1" $ dir "logout" $ do
+         , dir "login" $ handleLogin c
+         , dir "createPost" $ handleCreatePost c
+         , dir "whoami" $ handleWhoami c
+         , dir "logout" $ do
             expireCookie "token"
             ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
-         , dir "v1" $ dir "editPost" $ handleEditPost c
-         , dir "v1" $ dir "deletePost" $ handleDeletePost c
+         , dir "editPost" $ handleEditPost c
+         , dir "deletePost" $ handleDeletePost c
          , notFound $ toResponse "Endpoint does not exist"
          ]
+
+main :: IO ()
+main = do
+  result <- try appMain :: IO (Either SomeException ())
+  case result of
+    Left _ -> main
+    Right _ -> return ()

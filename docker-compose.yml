@@ -12,6 +12,9 @@ services:
     image: registry.xnopyt.com/xnoeblog-backend:latest
     depends_on: 
       - database
+    environment:
+      - XNOEBLOG_USER=user
+      - XNOEBLOG_PASS=password
   
   nginx:
     restart: unless-stopped
@@ -28,3 +31,8 @@ services:
       - POSTGRES_PASSWORD=password
       - POSTGRES_USER=root
       - POSTGRES_DB=xnoeblog
+    volumes:
+      - postgres:/var/lib/postgres/data
+
+volumes:
+  postgres:
