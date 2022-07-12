@@ -355,7 +355,7 @@ prod_list accl accs chars =
         '\n' -> prod_list (accl++[text accs, br [] []]) "" tl
         '\r' -> prod_list accl accs tl
         c -> prod_list (accl) (accs++(String.fromChar c)) tl
-    [] -> accl
+    [] -> accl++[text accs]
 parseContent : String -> List (Html Msg)
 parseContent content =
   let chars = String.toList content in

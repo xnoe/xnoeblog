@@ -1,11 +1,12 @@
 module Main where
 
+import System.IO
 import Happstack.Server
 import Control.Monad
 import Control.Monad.Trans
 import Control.Exception
 import Database.HDBC
-import Database.HDBC.PostgreSQL (connectPostgreSQL)
+import Database.HDBC.PostgreSQL (connectPostgreSQL, Connection)
 import Text.JSON
 import Data.ByteString.Char8 as C (pack)
 import Data.ByteString.Lazy.Char8 as L (pack)
@@ -13,6 +14,7 @@ import Data.ByteString as B (unpack, ByteString)
 import Text.Printf
 import System.Random (newStdGen, randomRs)
 import System.ReadEnvVar (lookupEnv)
+import Data.Pool
 
 import Crypto.Hash.SHA256 as SHA256
 
@@ -316,8 +318,31 @@ handleWhoami c = do
     Just u -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true"), ("username", toJSString u)]
     Nothing -> ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "false"), ("username", toJSString "")]
 
-appMain :: IO ()
-appMain = do
+createPostgreSQLConnection :: String -> String -> String -> String -> IO Connection
+createPostgreSQLConnection dbhost dbuser dbpass dbname = do
+  putStrLn "Connection Created"
+  hFlush stdout
+  connectPostgreSQL ("host=" ++ dbhost ++ " user=" ++ dbuser ++ " password=" ++ dbpass ++ " dbname=" ++ dbname)
+
+destroyPostgreSQLConnection :: IConnection t => t -> IO ()
+destroyPostgreSQLConnection c = do
+  putStrLn "Connection Destroyed"
+  hFlush stdout
+  disconnect c
+
+handleTakeResource :: IConnection conn => (Pool conn) -> (conn -> a) -> ServerPartT IO a
+handleTakeResource pool f = do
+  lift $ putStrLn "Resource Taken From Pool."
+  lift $ hFlush stdout
+  (c, localpool) <- lift $ takeResource pool
+  let v = return $ f c
+  lift $ putResource localpool c
+  v
+
+main :: IO ()
+main = do
+  putStrLn "Starting!"
+  hFlush stdout
   dbhostvar <- lookupEnv "DB_HOST"
   dbuservar <- lookupEnv "DB_USER"
   dbpassvar <- lookupEnv "DB_PASS"
@@ -345,7 +370,11 @@ appMain = do
                 Just p -> p
                 Nothing -> ""
 
-  c <- connectPostgreSQL ("host=" ++ dbhost ++ " user=" ++ dbuser ++ " password=" ++ dbpass ++ " dbname=" ++ dbname)
+  --c <- connectPostgreSQL ("host=" ++ dbhost ++ " user=" ++ dbuser ++ " password=" ++ dbpass ++ " dbname=" ++ dbname)
+
+  pool <- newPool (PoolConfig {createResource = createPostgreSQLConnection dbhost dbuser dbpass dbname, freeResource = destroyPostgreSQLConnection, poolCacheTTL = 300, poolMaxResources = 20})
+
+  (c, localpool) <- takeResource pool
 
   createPostsTable <- prepare c "CREATE TABLE IF NOT EXISTS posts(postid serial primary key, catid int, title varchar(128), subtext varchar(128), content text);"
   createCategoriesTable <- prepare c "CREATE TABLE IF NOT EXISTS categories(catid serial primary key, name varchar(128));"
@@ -371,44 +400,42 @@ appMain = do
   else
     do return ()
 
+  putResource localpool c;
+
   simpleHTTP config $ do
     decodeBody (defaultBodyPolicy "/tmp/" 0 4096 4096)
-    msum [ dir "post" $ path $ \pid -> require (getPostContent c pid) $ \post -> ok $ toResponse post
-         , dir "category" $ path $ \cid -> do
-            page <- look "page"
-            let p = read page :: Int
-            if (p < 0) then 
-              ok $ toResponse ""
-            else
-              require (getPostsInCategory c cid p) $ \cat -> ok $ toResponse cat
-         , dir "posts" $ do
-            page <- look "page"
-            let p = read page :: Int
-            if (p < 0) then 
-              ok $ toResponse ""
-            else 
-              require (getPostListing c p) $ \posts -> ok $ toResponse posts
-         , dir "categories" $ do
-            page <- look "page"
-            let p = read page :: Int
-            if (p < 0) then 
-              ok $ toResponse ""
-            else
-              require (getCategoryListing c p) $ \cats -> ok $ toResponse cats
-         , dir "login" $ handleLogin c
-         , dir "createPost" $ handleCreatePost c
-         , dir "whoami" $ handleWhoami c
-         , dir "logout" $ do
-            expireCookie "token"
-            ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
-         , dir "editPost" $ handleEditPost c
-         , dir "deletePost" $ handleDeletePost c
-         , notFound $ toResponse "Endpoint does not exist"
-         ]
 
-main :: IO ()
-main = do
-  result <- try appMain :: IO (Either SomeException ())
-  case result of
-    Left _ -> main
-    Right _ -> return ()
+    r <- handleTakeResource pool $ 
+      \c -> msum  [ dir "post" $ path $ \pid -> require (getPostContent c pid) $ \post -> ok $ toResponse post
+                  , dir "category" $ path $ \cid -> do
+                      page <- look "page"
+                      let p = read page :: Int
+                      if (p < 0) then 
+                        ok $ toResponse ""
+                      else
+                        require (getPostsInCategory c cid p) $ \cat -> ok $ toResponse cat
+                  , dir "posts" $ do
+                      page <- look "page"
+                      let p = read page :: Int
+                      if (p < 0) then 
+                        ok $ toResponse ""
+                      else 
+                        require (getPostListing c p) $ \posts -> ok $ toResponse posts
+                  , dir "categories" $ do
+                      page <- look "page"
+                      let p = read page :: Int
+                      if (p < 0) then 
+                        ok $ toResponse ""
+                      else
+                        require (getCategoryListing c p) $ \cats -> ok $ toResponse cats
+                  , dir "login" $ handleLogin c
+                  , dir "createPost" $ handleCreatePost c
+                  , dir "whoami" $ handleWhoami c
+                  , dir "logout" $ do
+                      expireCookie "token"
+                      ok $ toResponse $ showJSON $ toJSObject [("success", toJSString "true")]
+                  , dir "editPost" $ handleEditPost c
+                  , dir "deletePost" $ handleDeletePost c
+                  , notFound $ toResponse "Endpoint does not exist"
+                  ]
+    r 

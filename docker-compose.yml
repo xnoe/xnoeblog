@@ -10,8 +10,6 @@ services:
     restart: unless-stopped
     build: ./backend
     image: registry.xnopyt.com/xnoeblog-backend:latest
-    depends_on: 
-      - database
     environment:
       - XNOEBLOG_USER=user
       - XNOEBLOG_PASS=password

@@ -7,9 +7,4 @@ COPY ./backend.cabal /opt/backend
 RUN cabal build --only-dependencies -j4
 COPY . /opt/backend
 RUN cabal install
-
-FROM debian:buster
-RUN apt-get update
-RUN yes | apt-get install postgresql libpq-dev
-COPY --from=build /root/.cabal/bin/backend ./
-CMD ["./backend"]
+CMD ["backend"]
